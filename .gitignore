@@ -1,0 +1,15 @@
+# Build output
+/bin/
+/dist/
+*.exe
+
+# Local configuration and secrets
+.env
+config/servers.local.json
+
+# Session logs
+/logs/
+
+# Editor / OS
+.DS_Store
+*.swp
