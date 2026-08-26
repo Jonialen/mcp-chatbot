@@ -2,11 +2,22 @@
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "./workspace"
+      ]
     },
     "git": {
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "./workspace"]
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "./workspace"
+      ]
+    },
+    "netprobe": {
+      "url": "http://localhost:8931/mcp"
     }
   }
 }

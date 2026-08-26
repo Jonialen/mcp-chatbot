@@ -75,7 +75,12 @@ func run(opts options) error {
 		Verbose: opts.verbose,
 	})
 
-	provider, err := gemini.New(ctx, gemini.Config{Model: opts.model})
+	provider, err := gemini.New(ctx, gemini.Config{
+		Model: opts.model,
+		OnFallback: func(from, to string) {
+			fmt.Printf("\n  the free allowance of %s is spent for today; continuing on %s\n\n", from, to)
+		},
+	})
 	if err != nil {
 		return err
 	}
