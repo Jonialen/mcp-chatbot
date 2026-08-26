@@ -42,6 +42,10 @@ type Server struct {
 	// URL reaches a remote server over HTTP instead of launching a process.
 	URL string `json:"url,omitempty"`
 
+	// Headers are sent on every request to a remote server, for API keys and
+	// the like. They are ignored for local servers, which use Env instead.
+	Headers map[string]string `json:"headers,omitempty"`
+
 	// Disabled keeps an entry in the file without connecting to it, which is
 	// how a classmate's broken server is parked without losing its definition.
 	Disabled bool `json:"disabled,omitempty"`

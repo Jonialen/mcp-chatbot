@@ -15,11 +15,12 @@ import (
 
 // connection reports what happened when one configured server was contacted.
 type connection struct {
-	Name    string
-	Server  mcp.Implementation
-	Version string
-	Tools   []string
-	Err     error
+	Name      string
+	Transport string
+	Server    mcp.Implementation
+	Version   string
+	Tools     []string
+	Err       error
 }
 
 // OK reports whether the server is usable.
@@ -52,23 +53,34 @@ func connectOne(
 	reg *registry.Registry,
 	log *mcplog.Logger,
 ) connection {
-	result := connection{Name: entry.Name}
+	result := connection{Name: entry.Name, Transport: "stdio"}
+
+	// The two transports differ in everything except what they carry, which is
+	// why the choice ends here: the session, the JSON-RPC client and the
+	// registry above never learn whether this server is a child process on this
+	// machine or a service on the far side of the internet.
+	var (
+		tr  transport.Transport
+		err error
+	)
 
 	if entry.IsRemote() {
-		// The HTTP transport is the next milestone; saying so beats a
-		// connection that fails for a reason nobody can read.
-		result.Err = fmt.Errorf("remote servers are not supported yet (url %s)", entry.URL)
-		return result
+		result.Transport = "http"
+		tr, err = transport.NewHTTP(transport.HTTPConfig{
+			Endpoint: entry.URL,
+			Headers:  entry.Headers,
+			OnNotice: func(line string) { log.Event(entry.Name, line) },
+		})
+	} else {
+		tr, err = transport.NewStdio(transport.StdioConfig{
+			Command:  entry.Command,
+			Args:     entry.Args,
+			Env:      entry.Env,
+			Dir:      entry.Dir,
+			OnStderr: func(line string) { log.Event(entry.Name, "stderr: "+line) },
+			OnNotice: func(line string) { log.Event(entry.Name, line) },
+		})
 	}
-
-	tr, err := transport.NewStdio(transport.StdioConfig{
-		Command:  entry.Command,
-		Args:     entry.Args,
-		Env:      entry.Env,
-		Dir:      entry.Dir,
-		OnStderr: func(line string) { log.Event(entry.Name, "stderr: "+line) },
-		OnNotice: func(line string) { log.Event(entry.Name, line) },
-	})
 	if err != nil {
 		result.Err = err
 		return result
@@ -115,7 +127,7 @@ func describe(c connection, elapsed time.Duration) string {
 	if !c.OK() {
 		return fmt.Sprintf("  %-14s unavailable: %v", c.Name, c.Err)
 	}
-	return fmt.Sprintf("  %-14s %s %s  (protocol %s, %d tools, %s)",
-		c.Name, c.Server.Name, c.Server.Version, c.Version, len(c.Tools),
+	return fmt.Sprintf("  %-14s %-5s %s %s  (protocol %s, %d tools, %s)",
+		c.Name, c.Transport, c.Server.Name, c.Server.Version, c.Version, len(c.Tools),
 		elapsed.Round(time.Millisecond))
 }
