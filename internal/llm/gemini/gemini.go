@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"google.golang.org/genai"
 
@@ -22,6 +23,19 @@ import (
 // A stable model, not a preview: preview endpoints answer 503 under load, which
 // is not something a live demonstration should depend on.
 const DefaultModel = "gemini-3.6-flash"
+
+// DefaultFallbacks are tried, in order, once a model's free allowance for the
+// day is gone.
+//
+// The free tier meters requests per model per day, so a second model is a
+// second allowance. Without this the host stops working partway through an
+// afternoon of development, and a demonstration that outlives its quota simply
+// stops answering.
+var DefaultFallbacks = []string{
+	"gemini-3.5-flash",
+	"gemini-3.5-flash-lite",
+	"gemini-3.1-flash-lite",
+}
 
 // DefaultThinkingLevel keeps the chatbot responsive.
 //
@@ -41,9 +55,17 @@ const toolErrorKey = "error"
 // Provider talks to Gemini through the official Go SDK.
 type Provider struct {
 	client      *genai.Client
-	model       string
 	thinking    genai.ThinkingLevel
 	maxAttempts int
+	onFallback  func(from, to string)
+
+	// models is the fallback chain, most preferred first.
+	models []string
+
+	// current indexes models. It only ever moves forward: a model whose daily
+	// allowance ran out will not recover within this session.
+	mu      sync.Mutex
+	current int
 }
 
 // Config configures a Provider.
@@ -62,6 +84,15 @@ type Config struct {
 	// MaxAttempts bounds retries of an overloaded or rate-limited service.
 	// Zero means defaultMaxAttempts; one disables retrying.
 	MaxAttempts int
+
+	// Fallbacks are tried in order once a model's daily allowance is gone.
+	// Nil means DefaultFallbacks; an empty slice disables falling back.
+	Fallbacks []string
+
+	// OnFallback, if set, is told when the provider moves to another model.
+	// Switching silently would leave a session answering from a model nobody
+	// chose, with no sign of why the answers changed.
+	OnFallback func(from, to string)
 }
 
 // New builds a Provider.
@@ -96,16 +127,58 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		attempts = defaultMaxAttempts
 	}
 
+	fallbacks := cfg.Fallbacks
+	if fallbacks == nil {
+		fallbacks = DefaultFallbacks
+	}
+
 	return &Provider{
 		client:      client,
-		model:       model,
 		thinking:    thinking,
 		maxAttempts: attempts,
+		onFallback:  cfg.OnFallback,
+		models:      chain(model, fallbacks),
 	}, nil
 }
 
-func (p *Provider) Name() string  { return "google" }
-func (p *Provider) Model() string { return p.model }
+// chain builds the ordered list of models to try, without repeating one.
+func chain(primary string, fallbacks []string) []string {
+	models := []string{primary}
+	for _, model := range fallbacks {
+		if model != "" && model != primary {
+			models = append(models, model)
+		}
+	}
+	return models
+}
+
+func (p *Provider) Name() string { return "google" }
+
+// Model returns the model currently in use, which is not necessarily the one
+// configured: it advances when a daily allowance runs out.
+func (p *Provider) Model() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.models[p.current]
+}
+
+// nextModel moves to the next model in the chain, reporting whether there was
+// one. Comparing against the model that failed keeps two callers racing on the
+// same exhausted model from skipping a healthy one between them.
+func (p *Provider) nextModel(failed string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.models[p.current] != failed {
+		// Another call already moved on; use where it landed.
+		return p.models[p.current], true
+	}
+	if p.current+1 >= len(p.models) {
+		return "", false
+	}
+	p.current++
+	return p.models[p.current], true
+}
 
 // Generate sends one request and returns the model's reply.
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response, error) {
@@ -131,13 +204,32 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 		config.Tools = []*genai.Tool{tool}
 	}
 
-	result, err := withRetry(ctx, p.maxAttempts, func() (*genai.GenerateContentResponse, error) {
-		return p.client.Models.GenerateContent(ctx, p.model, contents, config)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("gemini: generate: %w", err)
+	// Each model in the chain gets its own retry budget: an overloaded service
+	// and an exhausted allowance are different failures with different cures.
+	for {
+		model := p.Model()
+
+		result, err := withRetry(ctx, p.maxAttempts, func() (*genai.GenerateContentResponse, error) {
+			return p.client.Models.GenerateContent(ctx, model, contents, config)
+		})
+		if err == nil {
+			return fromResult(result), nil
+		}
+
+		if !quotaExhausted(err) {
+			return nil, fmt.Errorf("gemini: generate with %s: %w", model, err)
+		}
+
+		next, available := p.nextModel(model)
+		if !available {
+			return nil, fmt.Errorf(
+				"gemini: the free allowance of every configured model is spent (%s): %w",
+				strings.Join(p.models, ", "), err)
+		}
+		if p.onFallback != nil {
+			p.onFallback(model, next)
+		}
 	}
-	return fromResult(result), nil
 }
 
 // toTool turns the host's tool definitions into a single Gemini tool holding
