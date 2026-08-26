@@ -13,3 +13,9 @@ config/servers.local.json
 # Editor / OS
 .DS_Store
 *.swp
+
+# Sandbox the MCP servers operate on
+/workspace/
+
+# Frame logs are per-run artefacts
+/logs/

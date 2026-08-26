@@ -1,134 +1,138 @@
-// Command host is the console chatbot that acts as an MCP host.
+// Command host is a console chatbot that acts as an MCP host.
 //
-// At this stage it is a protocol smoke test: it launches the official
-// filesystem MCP server, completes the handshake, lists the server's tools and
-// invokes one, printing every JSON-RPC frame that crosses the transport.
+// It launches the MCP servers named in a configuration file, collects their
+// tools into one list, hands that list to a model, and runs the loop in which
+// the model asks for a tool and this program carries the request out.
+//
+// The Model Context Protocol is implemented directly over JSON-RPC 2.0, with no
+// MCP SDK: every frame in the log was built and parsed by this codebase.
 package main
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/Jonialen/mcp-chatbot/internal/mcp"
+	"github.com/Jonialen/mcp-chatbot/internal/agent"
+	"github.com/Jonialen/mcp-chatbot/internal/config"
+	"github.com/Jonialen/mcp-chatbot/internal/llm/gemini"
 	"github.com/Jonialen/mcp-chatbot/internal/mcplog"
-	"github.com/Jonialen/mcp-chatbot/internal/transport"
-)
-
-const (
-	serverLabel   = "filesystem"
-	handshakeWait = 60 * time.Second
+	"github.com/Jonialen/mcp-chatbot/internal/registry"
 )
 
 func main() {
-	dir := flag.String("dir", ".", "directory to expose through the filesystem server")
-	tool := flag.String("tool", "list_allowed_directories", "tool to invoke as a smoke test")
-	args := flag.String("args", "{}", "arguments for the tool, as a JSON object")
-	flag.Parse()
+	opts := parseFlags()
 
-	if err := run(*dir, *tool, *args); err != nil {
+	if err := run(opts); err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir, tool, rawArgs string) error {
-	var toolArgs map[string]any
-	if err := json.Unmarshal([]byte(rawArgs), &toolArgs); err != nil {
-		return fmt.Errorf("parse -args as a JSON object: %w", err)
-	}
+type options struct {
+	configPath string
+	logDir     string
+	model      string
+	verbose    bool
+}
 
-	root, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve working directory: %w", err)
-	}
-	if dir != "" {
-		root = dir
-	}
+func parseFlags() options {
+	var opts options
+	flag.StringVar(&opts.configPath, "config", "config/servers.json", "MCP server configuration")
+	flag.StringVar(&opts.logDir, "logs", "logs", "directory for the JSON-RPC frame log")
+	flag.StringVar(&opts.model, "model", "", "model to use (default "+gemini.DefaultModel+")")
+	flag.BoolVar(&opts.verbose, "verbose", false, "show whole JSON-RPC frames on screen")
+	flag.Parse()
+	return opts
+}
 
+func run(opts options) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log := mcplog.New(os.Stdout)
+	cfg, err := config.Load(opts.configPath)
+	if err != nil {
+		return err
+	}
 
-	// The filesystem server is an npm package, so it is launched through npx.
-	// Nothing about this host is aware of that: it starts a process and speaks
-	// JSON-RPC to it, which is the whole point of the protocol.
-	tr, err := transport.NewStdio(transport.StdioConfig{
-		Command:  "npx",
-		Args:     []string{"-y", "@modelcontextprotocol/server-filesystem", root},
-		OnStderr: func(line string) { log.Event(serverLabel, "stderr: "+line) },
-		OnNotice: func(line string) { log.Event(serverLabel, line) },
+	logFile, logPath, err := openLog(opts.logDir)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	log := mcplog.New(mcplog.Options{
+		File:    logFile,
+		Screen:  os.Stdout,
+		Verbose: opts.verbose,
 	})
+
+	provider, err := gemini.New(ctx, gemini.Config{Model: opts.model})
 	if err != nil {
 		return err
 	}
 
-	session := mcp.NewSession(ctx, mcp.SessionConfig{
-		Name:      serverLabel,
-		Transport: tr,
-		LogFrame:  log.For(serverLabel),
-		OnNotification: func(method string, _ json.RawMessage) {
-			log.Event(serverLabel, "notification: "+method)
-		},
+	reg := registry.New()
+	defer reg.Close()
+
+	fmt.Printf("connecting to %d MCP servers...\n\n", len(cfg.Enabled()))
+
+	started := time.Now()
+	connections := connectAll(ctx, cfg, reg, log)
+	elapsed := time.Since(started)
+
+	banner(provider.Name(), provider.Model(), logPath, connections, reg, elapsed)
+
+	if reg.Len() == 0 {
+		return fmt.Errorf("no MCP server came up; nothing to demonstrate")
+	}
+
+	bot := agent.New(agent.Config{
+		Provider: provider,
+		Tools:    reg,
+		Observe:  progressReporter(os.Stdout),
 	})
-	defer session.Close()
 
-	// npx may need to download the package on a cold cache, so the handshake
-	// gets a generous deadline of its own.
-	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeWait)
-	defer cancel()
-
-	info, err := session.Initialize(handshakeCtx)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("\nconnected to %s %s (protocol %s, tools capability: %t)\n\n",
-		info.ServerInfo.Name, info.ServerInfo.Version,
-		session.ProtocolVersion(), info.SupportsTools())
-
-	tools, err := session.ListTools(ctx)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("\n%d tools exposed:\n", len(tools))
-	for _, t := range tools {
-		fmt.Printf("  - %-32s %s\n", t.Name, firstLine(t.Description))
-	}
-
-	fmt.Printf("\ncalling %q...\n\n", tool)
-	result, err := session.CallTool(ctx, tool, toolArgs)
-	if err != nil {
-		return err
-	}
-
-	// A tool that ran and failed is reported here, not raised: the flag travels
-	// in the result so a model can read the failure and react to it.
-	if result.IsError {
-		fmt.Printf("\ntool reported an error:\n%s\n", result.Text())
-		return nil
-	}
-	fmt.Printf("\ntool result:\n%s\n", result.Text())
-	return nil
+	return repl(ctx, bufio.NewScanner(os.Stdin), os.Stdout, bot, reg, log)
 }
 
-func firstLine(s string) string {
-	const max = 72
-	for i, r := range s {
-		if r == '\n' {
-			s = s[:i]
-			break
-		}
+// openLog creates the file the frame record is written to. Every run gets its
+// own file, so a demonstration can be replayed from the exact session it came
+// from.
+func openLog(dir string) (*os.File, string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("create log directory: %w", err)
 	}
-	if len(s) > max {
-		return s[:max] + "..."
+
+	path := filepath.Join(dir, fmt.Sprintf("mcp-%s.log", time.Now().Format("20060102-150405")))
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("create log file: %w", err)
 	}
-	return s
+	return file, path, nil
+}
+
+func banner(
+	vendor, model, logPath string,
+	connections []connection,
+	reg *registry.Registry,
+	elapsed time.Duration,
+) {
+	fmt.Println()
+	for _, c := range connections {
+		fmt.Println(describe(c, elapsed))
+	}
+
+	fmt.Printf("\n  model         %s (%s)\n", model, vendor)
+	fmt.Printf("  tools         %d\n", reg.Len())
+	fmt.Printf("  frame log     %s\n", logPath)
+	fmt.Printf("\ntype /help for commands, /quit to leave\n\n")
 }
