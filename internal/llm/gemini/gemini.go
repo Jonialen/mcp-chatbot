@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"google.golang.org/genai"
 
@@ -17,7 +18,17 @@ import (
 )
 
 // DefaultModel is used when none is configured.
-const DefaultModel = "gemini-3-flash-preview"
+//
+// A stable model, not a preview: preview endpoints answer 503 under load, which
+// is not something a live demonstration should depend on.
+const DefaultModel = "gemini-3.6-flash"
+
+// DefaultThinkingLevel keeps the chatbot responsive.
+//
+// Picking a tool out of a list and filling its arguments is a shallow decision,
+// and the deeper levels cost tens of seconds per turn. Raise it through Config
+// if a task turns out to need it.
+const DefaultThinkingLevel = genai.ThinkingLevelLow
 
 // toolResultKey is the field tool output is wrapped in. Gemini expects a
 // function response to be a JSON object, so a plain string needs a home.
@@ -29,8 +40,10 @@ const toolErrorKey = "error"
 
 // Provider talks to Gemini through the official Go SDK.
 type Provider struct {
-	client *genai.Client
-	model  string
+	client      *genai.Client
+	model       string
+	thinking    genai.ThinkingLevel
+	maxAttempts int
 }
 
 // Config configures a Provider.
@@ -41,6 +54,14 @@ type Config struct {
 
 	// Model selects the model. Empty means DefaultModel.
 	Model string
+
+	// ThinkingLevel controls how much the model reasons before answering.
+	// Empty means DefaultThinkingLevel.
+	ThinkingLevel genai.ThinkingLevel
+
+	// MaxAttempts bounds retries of an overloaded or rate-limited service.
+	// Zero means defaultMaxAttempts; one disables retrying.
+	MaxAttempts int
 }
 
 // New builds a Provider.
@@ -58,6 +79,11 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		model = DefaultModel
 	}
 
+	thinking := cfg.ThinkingLevel
+	if thinking == "" {
+		thinking = DefaultThinkingLevel
+	}
+
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -65,7 +91,17 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create client: %w", err)
 	}
-	return &Provider{client: client, model: model}, nil
+	attempts := cfg.MaxAttempts
+	if attempts < 1 {
+		attempts = defaultMaxAttempts
+	}
+
+	return &Provider{
+		client:      client,
+		model:       model,
+		thinking:    thinking,
+		maxAttempts: attempts,
+	}, nil
 }
 
 func (p *Provider) Name() string  { return "google" }
@@ -78,7 +114,9 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 		return nil, err
 	}
 
-	config := &genai.GenerateContentConfig{}
+	config := &genai.GenerateContentConfig{
+		ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: p.thinking},
+	}
 	if req.System != "" {
 		config.SystemInstruction = genai.NewContentFromText(req.System, genai.RoleUser)
 	}
@@ -93,7 +131,9 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 		config.Tools = []*genai.Tool{tool}
 	}
 
-	result, err := p.client.Models.GenerateContent(ctx, p.model, contents, config)
+	result, err := withRetry(ctx, p.maxAttempts, func() (*genai.GenerateContentResponse, error) {
+		return p.client.Models.GenerateContent(ctx, p.model, contents, config)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("gemini: generate: %w", err)
 	}
@@ -156,12 +196,16 @@ func toParts(msg llm.Message) ([]*genai.Part, error) {
 	}
 
 	for _, call := range msg.ToolCalls {
+		// The signature the model issued with this call travels back on the
+		// same part. Gemini 3 models reject a replayed tool call without it:
+		// "Function call is missing a thought_signature in functionCall parts."
 		parts = append(parts, &genai.Part{
 			FunctionCall: &genai.FunctionCall{
 				ID:   call.ID,
 				Name: call.Name,
 				Args: call.Arguments,
 			},
+			ThoughtSignature: call.ProviderState,
 		})
 	}
 
@@ -193,15 +237,36 @@ func roleOf(msg llm.Message) genai.Role {
 	return genai.RoleUser
 }
 
+// fromResult reads the model's reply.
+//
+// The parts are walked by hand rather than through the SDK's Text and
+// FunctionCalls helpers. FunctionCalls returns the calls detached from the
+// parts that carried them, which loses the signature each call has to be
+// replayed with, and Text does not distinguish the model's reasoning from its
+// answer.
 func fromResult(result *genai.GenerateContentResponse) *llm.Response {
-	response := &llm.Response{Text: result.Text()}
+	response := &llm.Response{}
 
-	for _, call := range result.FunctionCalls() {
-		response.ToolCalls = append(response.ToolCalls, llm.ToolCall{
-			ID:        call.ID,
-			Name:      call.Name,
-			Arguments: call.Args,
-		})
+	if len(result.Candidates) > 0 && result.Candidates[0].Content != nil {
+		var text strings.Builder
+
+		for _, part := range result.Candidates[0].Content.Parts {
+			switch {
+			case part == nil:
+			case part.Thought:
+				// The model's reasoning, not its answer to the user.
+			case part.FunctionCall != nil:
+				response.ToolCalls = append(response.ToolCalls, llm.ToolCall{
+					ID:            part.FunctionCall.ID,
+					Name:          part.FunctionCall.Name,
+					Arguments:     part.FunctionCall.Args,
+					ProviderState: part.ThoughtSignature,
+				})
+			case part.Text != "":
+				text.WriteString(part.Text)
+			}
+		}
+		response.Text = text.String()
 	}
 
 	if usage := result.UsageMetadata; usage != nil {

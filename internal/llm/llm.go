@@ -43,6 +43,16 @@ type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments map[string]any
+
+	// ProviderState is opaque data the provider attached to this call and
+	// expects back verbatim when the conversation continues.
+	//
+	// Reasoning models sign their tool calls and reject a replayed history in
+	// which the signature is missing, so a call cannot be reconstructed from
+	// name and arguments alone. The host never inspects this; it only has to
+	// carry it, which is why it is bytes and not a provider type. Dropping it
+	// is what makes the second turn of an agent loop fail.
+	ProviderState []byte
 }
 
 // ToolResult is what a tool produced, on its way back to the model.

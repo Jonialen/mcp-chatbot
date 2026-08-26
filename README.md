@@ -22,6 +22,19 @@ See `docs/` for the assignment brief and the use case.
 
 - Go 1.24 or newer
 - Node.js (only to run the official MCP servers through `npx`)
+- A Gemini API key in `GEMINI_API_KEY` (free from https://aistudio.google.com/apikey)
+
+## Choice of model
+
+The assignment suggests Anthropic because of its free credits, but the
+requirement itself asks for "un LLM". This host uses Google Gemini, reached
+through the `llm.Provider` port, and the MCP layer below it is unaware of that
+choice.
+
+Running Anthropic's own MCP servers against a Google model is the point: the
+brief opens by observing that tool integrations are not portable between
+vendors, and that MCP exists to make the tool independent of the model. Using
+the vendor that designed the protocol would demonstrate none of that.
 
 ## Running the protocol smoke test
 
@@ -51,6 +64,17 @@ has to be present, nothing else is installed by hand.
 go test ./... -race
 ```
 
+Tests that call the real Gemini API are skipped unless `GEMINI_API_KEY` is set:
+
+```sh
+GEMINI_API_KEY=... go test ./internal/llm/gemini -run TestLive -v
+```
+
+They exist because unit tests can only prove what this code sends. Only the
+service can prove what it accepts, and the schemas they use are captured from a
+real run of the official filesystem server rather than written to be
+convenient.
+
 ## Layout
 
 | Path | Purpose |
@@ -59,6 +83,8 @@ go test ./... -race
 | `internal/jsonrpc` | JSON-RPC 2.0 envelope, client and request/response correlation |
 | `internal/transport` | Frame transports: stdio for local servers, HTTP for remote ones |
 | `internal/mcp` | MCP message types and session lifecycle |
+| `internal/llm` | Provider port: the boundary between the chatbot and any model |
+| `internal/llm/gemini` | Google Gemini adapter |
 | `internal/mcplog` | Human-readable log of every JSON-RPC frame |
 | `config` | Declarative list of MCP servers to launch |
 
