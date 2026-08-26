@@ -22,3 +22,8 @@ config/servers.local.json
 
 # Locally built helper binaries
 /bin/
+
+# BrewOps is its own module and its own PUBLIC repository. This one is private,
+# and a public module cannot depend on a private one, so the two never merge.
+# Ignored here so an "add ." in this repository can never swallow it.
+/brewops/
