@@ -19,3 +19,6 @@ config/servers.local.json
 
 # Frame logs are per-run artefacts
 /logs/
+
+# Locally built helper binaries
+/bin/

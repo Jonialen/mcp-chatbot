@@ -16,8 +16,12 @@
         "./workspace"
       ]
     },
-    "netprobe": {
-      "url": "http://localhost:8931/mcp"
+    "brewops": {
+      "command": "./bin/brewops",
+      "args": [
+        "-db",
+        "./workspace/brewops.db"
+      ]
     }
   }
 }
