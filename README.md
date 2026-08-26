@@ -12,9 +12,9 @@ Course project for CC3067 Redes — Universidad del Valle de Guatemala.
 
 ## Status
 
-Under development. The JSON-RPC layer, the stdio transport and the MCP session
-lifecycle are implemented and exercised against the official filesystem server.
-The model loop and the terminal interface are not built yet.
+Working end to end over local servers. The host connects to every server named
+in its configuration, exposes their tools to the model as one list, and runs the
+tool loop. Remote servers over HTTP are the next milestone.
 
 See `docs/` for the assignment brief and the use case.
 
@@ -36,27 +36,64 @@ brief opens by observing that tool integrations are not portable between
 vendors, and that MCP exists to make the tool independent of the model. Using
 the vendor that designed the protocol would demonstrate none of that.
 
-## Running the protocol smoke test
-
-Launches the official filesystem MCP server, completes the handshake, lists its
-tools and invokes one, printing every JSON-RPC frame in both directions.
+## Running
 
 ```sh
-# List the directories the server is allowed to reach
-go run ./cmd/host -dir "$PWD"
-
-# Invoke a tool that takes arguments
-go run ./cmd/host -dir "$PWD" -tool list_directory -args '{"path":"'"$PWD"'"}'
+export GEMINI_API_KEY=...
+mkdir -p workspace && git -C workspace init
+go run ./cmd/host
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `-dir` | Directory exposed through the filesystem server |
-| `-tool` | Tool to invoke once the handshake completes |
-| `-args` | Arguments for that tool, as a JSON object |
+| `-config` | Server list to load (default `config/servers.json`) |
+| `-logs` | Directory for the JSON-RPC frame log (default `logs`) |
+| `-model` | Model to use |
+| `-verbose` | Show whole JSON-RPC frames on screen |
 
-The filesystem server is an npm package and is launched through `npx`; Node only
-has to be present, nothing else is installed by hand.
+In the session:
+
+| Command | Meaning |
+| --- | --- |
+| `/tools [server]` | List the tools available |
+| `/log` | Toggle whole frames on screen |
+| `/usage` | Tokens spent in this conversation |
+| `/reset` | Forget the conversation, keep the servers connected |
+| `/quit` | Leave |
+
+## Configuring servers
+
+`config/servers.json` uses the same shape as Claude Desktop, so a server
+published by somebody else can be added by pasting the block from its README.
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "./workspace"]
+    }
+  }
+}
+```
+
+The label on the left becomes the prefix of that server's tools, which is how
+two servers that both publish `read_file` stay apart. `"disabled": true` parks
+an entry without connecting to it.
+
+A server that fails to start is reported and stepped over; the rest of the
+session continues without it.
+
+## The frame log
+
+Every run writes `logs/mcp-<timestamp>.log` holding every JSON-RPC frame, in
+both directions, exactly as it crossed the transport. The screen shows one-line
+summaries because a single `tools/list` result runs to thirteen kilobytes;
+`/log` switches the screen to whole frames.
 
 ## Tests
 
