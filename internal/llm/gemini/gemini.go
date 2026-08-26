@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -58,6 +59,7 @@ type Provider struct {
 	thinking    genai.ThinkingLevel
 	maxAttempts int
 	onFallback  func(from, to string)
+	onWait      func(model string, delay time.Duration, requested bool)
 
 	// models is the fallback chain, most preferred first.
 	models []string
@@ -93,6 +95,11 @@ type Config struct {
 	// Switching silently would leave a session answering from a model nobody
 	// chose, with no sign of why the answers changed.
 	OnFallback func(from, to string)
+
+	// OnWait, if set, is told when a call is being held before another attempt.
+	// A rate limiter can ask for most of a minute, and a session that pauses
+	// that long without saying why is indistinguishable from one that hung.
+	OnWait func(model string, delay time.Duration, requested bool)
 }
 
 // New builds a Provider.
@@ -137,6 +144,7 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		thinking:    thinking,
 		maxAttempts: attempts,
 		onFallback:  cfg.OnFallback,
+		onWait:      cfg.OnWait,
 		models:      chain(model, fallbacks),
 	}, nil
 }
@@ -160,6 +168,16 @@ func (p *Provider) Model() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.models[p.current]
+}
+
+// waitNotice adapts the provider's hook to what the retry loop reports.
+func (p *Provider) waitNotice(model string) onWait {
+	if p.onWait == nil {
+		return nil
+	}
+	return func(delay time.Duration, requested bool) {
+		p.onWait(model, delay, requested)
+	}
 }
 
 // nextModel moves to the next model in the chain, reporting whether there was
@@ -209,9 +227,10 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 	for {
 		model := p.Model()
 
-		result, err := withRetry(ctx, p.maxAttempts, func() (*genai.GenerateContentResponse, error) {
-			return p.client.Models.GenerateContent(ctx, model, contents, config)
-		})
+		result, err := withRetry(ctx, p.maxAttempts, p.waitNotice(model),
+			func() (*genai.GenerateContentResponse, error) {
+				return p.client.Models.GenerateContent(ctx, model, contents, config)
+			})
 		if err == nil {
 			return fromResult(result), nil
 		}

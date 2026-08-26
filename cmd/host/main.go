@@ -80,6 +80,14 @@ func run(opts options) error {
 		OnFallback: func(from, to string) {
 			fmt.Printf("\n  the free allowance of %s is spent for today; continuing on %s\n\n", from, to)
 		},
+		OnWait: func(model string, delay time.Duration, requested bool) {
+			if requested {
+				fmt.Printf("  %s asked for %s before the next attempt; waiting\n",
+					model, delay.Round(time.Second))
+				return
+			}
+			fmt.Printf("  %s is busy; retrying in %s\n", model, delay.Round(time.Second))
+		},
 	})
 	if err != nil {
 		return err
