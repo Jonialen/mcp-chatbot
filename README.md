@@ -12,11 +12,31 @@ Course project for CC3067 Redes — Universidad del Valle de Guatemala.
 
 ## Status
 
-Working end to end over local servers. The host connects to every server named
-in its configuration, exposes their tools to the model as one list, and runs the
-tool loop. Remote servers over HTTP are the next milestone.
+Working end to end. The host connects to every server named in its
+configuration — local ones over stdio, remote ones over Streamable HTTP —
+exposes their tools to the model as one list, and runs the tool loop.
 
 See `docs/` for the assignment brief and the use case.
+
+## Servers in this project
+
+Two MCP servers are written here, both speaking JSON-RPC directly:
+
+| Server | Where it lives | Transport | What it does |
+| --- | --- | --- | --- |
+| **netprobe** | `cmd/netprobe` in this repository | HTTP | Resolves names, opens TCP connections and exchanges HTTP requests, reporting what each actually did. Built to run on a cloud host. |
+| **BrewOps** | [Jonialen/brewops-mcp](https://github.com/Jonialen/brewops-mcp) | stdio | A speciality coffee shop's catalogue, recipes and roast profiles, with the arithmetic and reasoning that turn one into the other. |
+
+BrewOps is a separate repository because it is published for other people to
+run, and it is a self-contained module: a classmate builds it and gets one
+static binary with no runtime to install.
+
+### Running netprobe
+
+```sh
+go run ./cmd/netprobe            # HTTP on $PORT, or :8080
+go run ./cmd/netprobe -stdio     # as a local server, for development
+```
 
 ## Requirements
 
@@ -76,10 +96,25 @@ published by somebody else can be added by pasting the block from its README.
     "git": {
       "command": "uvx",
       "args": ["mcp-server-git", "--repository", "./workspace"]
+    },
+    "brewops": {
+      "command": "./bin/brewops",
+      "args": ["-db", "./workspace/brewops.db"]
+    },
+    "netprobe": {
+      "url": "https://example.invalid/mcp"
     }
   }
 }
 ```
+
+A server with a `command` is launched as a child process and spoken to over
+stdio; one with a `url` is reached over Streamable HTTP. Nothing above the
+transport layer knows which is which.
+
+Those four servers are written in four different languages — TypeScript, Python
+and two in Go — and the host adapts to none of them. That is the protocol's own
+claim, and it is the point of the exercise.
 
 The label on the left becomes the prefix of that server's tools, which is how
 two servers that both publish `read_file` stay apart. `"disabled": true` parks
@@ -122,6 +157,11 @@ convenient.
 | `internal/mcp` | MCP message types and session lifecycle |
 | `internal/llm` | Provider port: the boundary between the chatbot and any model |
 | `internal/llm/gemini` | Google Gemini adapter |
+| `internal/registry` | Aggregates every server's tools under namespaced names and routes calls back |
+| `internal/agent` | The model-tool conversation loop |
+| `internal/config` | The declarative server list |
+| `internal/mcpserver` | The server half of MCP, used by `cmd/netprobe` |
+| `cmd/netprobe` | A remote MCP server reporting on the network |
 | `internal/mcplog` | Human-readable log of every JSON-RPC frame |
 | `config` | Declarative list of MCP servers to launch |
 
