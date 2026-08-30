@@ -40,6 +40,12 @@ docker compose up -d --build
 curl localhost:8080/health
 ```
 
+If port 8080 is taken on the host, move it without editing anything:
+
+```sh
+NETPROBE_PORT=8951 docker compose up -d --build
+```
+
 Or directly, for development:
 
 ```sh
