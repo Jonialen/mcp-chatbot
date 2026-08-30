@@ -22,6 +22,9 @@
         "-db",
         "./workspace/brewops.db"
       ]
+    },
+    "netprobe": {
+      "url": "http://localhost:8951/mcp"
     }
   }
 }

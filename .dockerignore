@@ -1,0 +1,12 @@
+# Everything the image does not need. Keeping the build context small is what
+# keeps `docker build` from uploading the git history and the logs on every run.
+.git/
+.env
+logs/
+workspace/
+bin/
+brewops/
+docs/
+*.md
+Dockerfile
+.dockerignore

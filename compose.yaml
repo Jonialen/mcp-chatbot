@@ -1,0 +1,21 @@
+# Runs the remote MCP server. The chatbot reaches it over Streamable HTTP, the
+# same way it would reach one on a cloud host.
+services:
+  netprobe:
+    build: .
+    image: netprobe:1.0.0
+    container_name: netprobe
+    ports:
+      # The container binds $PORT; a cloud runtime assigns it, and here it
+      # defaults to 8080.
+      - "8080:8080"
+    environment:
+      PORT: 8080
+    restart: unless-stopped
+    # The process probes the network on behalf of its callers and has no reason
+    # to write anywhere or to gain privileges.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

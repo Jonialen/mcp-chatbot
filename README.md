@@ -33,10 +33,35 @@ static binary with no runtime to install.
 
 ### Running netprobe
 
+In a container, which is how it is meant to run:
+
+```sh
+docker compose up -d --build
+curl localhost:8080/health
+```
+
+Or directly, for development:
+
 ```sh
 go run ./cmd/netprobe            # HTTP on $PORT, or :8080
-go run ./cmd/netprobe -stdio     # as a local server, for development
+go run ./cmd/netprobe -stdio     # as a local server over stdio
 ```
+
+Then point the host at it:
+
+```json
+{ "mcpServers": { "netprobe": { "url": "http://localhost:8080/mcp" } } }
+```
+
+The image is built in two stages and ends at `distroless/static`, which carries
+root certificates and nothing else — no shell, no package manager. The
+certificates are the reason it is not built on `scratch`: `http_probe` opens TLS
+connections, and an image without a certificate bundle fails every one of them
+with an unverifiable-authority error that reads like a network fault.
+
+The binary is linked statically (`CGO_ENABLED=0`) and the container runs as
+`nonroot` with no capabilities and a read-only filesystem: a process that reaches
+the network on behalf of whoever calls it should be able to do nothing else.
 
 ## Requirements
 

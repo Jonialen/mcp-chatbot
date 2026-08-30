@@ -1,6 +1,6 @@
 module github.com/Jonialen/mcp-chatbot
 
-go 1.27.0
+go 1.24
 
 require google.golang.org/genai v1.70.0
 
