@@ -26,6 +26,15 @@
         "brewops-data:/data",
         "brewops-mcp:1.0.0"
       ]
+    },
+    "rrhh": {
+      "command": "./peers/rrhh/.venv/bin/python",
+      "args": [
+        "./peers/rrhh/server.py"
+      ],
+      "env": [
+        "HR_DB_PATH=./workspace/hr.db"
+      ]
     }
   }
 }

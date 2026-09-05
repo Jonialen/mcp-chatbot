@@ -112,6 +112,27 @@ In the session:
 | `/reset` | Forget the conversation, keep the servers connected |
 | `/quit` | Leave |
 
+## Classmates' servers
+
+Requirement 6 asks for two MCP servers written by other students. They are not
+vendored here — they are their authors' repositories, cloned under `peers/`,
+which is ignored by git.
+
+| Server | Author | Language | Tools |
+| --- | --- | --- | --- |
+| `rrhh` | [NESHGP04/mcp-server-rrhh-construccion](https://github.com/NESHGP04/mcp-server-rrhh-construccion) | Python | 6 — HR management: employee lookup, vacation balances with carry-over, overtime pay by shift type, payroll and employment history |
+
+To set it up:
+
+```sh
+git clone https://github.com/NESHGP04/mcp-server-rrhh-construccion.git peers/rrhh
+cd peers/rrhh && python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+Its entry is already in `config/servers.json`. Nothing in this host was changed
+to accommodate it: it was added by pasting a block into the configuration, which
+is the point of the format being declarative.
+
 ## Configuring servers
 
 `config/servers.json` uses the same shape as Claude Desktop, so a server
