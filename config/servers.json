@@ -17,14 +17,15 @@
       ]
     },
     "brewops": {
-      "command": "./bin/brewops",
+      "command": "docker",
       "args": [
-        "-db",
-        "./workspace/brewops.db"
+        "run",
+        "-i",
+        "--rm",
+        "-v",
+        "brewops-data:/data",
+        "brewops-mcp:1.0.0"
       ]
-    },
-    "netprobe": {
-      "url": "http://localhost:8951/mcp"
     }
   }
 }
