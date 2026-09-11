@@ -35,6 +35,18 @@
       "env": [
         "HR_DB_PATH=./workspace/hr.db"
       ]
+    },
+    "hotel": {
+      "command": "./.venv/bin/python",
+      "args": [
+        "-m",
+        "hotel_mcp"
+      ],
+      "cwd": "./peers/hotel-mcp-server",
+      "env": [
+        "HOTEL_DB=./data/hotel-session.db",
+        "HOTEL_EXPORT_DIR=./comprobantes"
+      ]
     }
   }
 }
