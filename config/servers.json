@@ -47,6 +47,10 @@
         "HOTEL_DB=./data/hotel-session.db",
         "HOTEL_EXPORT_DIR=./comprobantes"
       ]
+    },
+    "netprobe": {
+      "url": "http://localhost:8080/mcp",
+      "disabled": true
     }
   }
 }
