@@ -32,8 +32,9 @@ type Stdio struct {
 	onStderr func(line string)
 	onNotice func(line string)
 
-	mu     sync.Mutex
-	closed bool
+	writeMu sync.Mutex
+	mu      sync.Mutex
+	closed  bool
 
 	errOnce sync.Once
 	readErr error
@@ -115,10 +116,18 @@ func (s *Stdio) Write(ctx context.Context, frame []byte) error {
 		return err
 	}
 
+	// Serialize frames without holding the state lock across a pipe write.
+	// Close must be able to close stdin even when the child stops reading it.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		return ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// The stdio transport is newline-delimited, so a frame is written together

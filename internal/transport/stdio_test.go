@@ -167,6 +167,9 @@ func TestStdioWriteAfterCloseFails(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	// Close must be safe to call twice.
+	if tr.cmd.ProcessState == nil || !tr.cmd.ProcessState.Exited() {
+		t.Fatal("Close returned without waiting for the synthetic child to exit")
+	}
 	if err := tr.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}

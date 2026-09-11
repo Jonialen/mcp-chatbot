@@ -49,7 +49,9 @@ type HTTP struct {
 	version   string
 	closed    bool
 
-	streams sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	requests sync.WaitGroup
 }
 
 // HTTPConfig configures an HTTP transport.
@@ -82,7 +84,10 @@ func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 		client = &http.Client{}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &HTTP{
+		ctx:      ctx,
+		cancel:   cancel,
 		endpoint: cfg.Endpoint,
 		client:   client,
 		headers:  cfg.Headers,
@@ -108,7 +113,18 @@ func (h *HTTP) Write(ctx context.Context, frame []byte) error {
 		h.mu.Unlock()
 		return ErrClosed
 	}
+	// Register before releasing the lock so Close cannot race Add against Wait.
+	h.requests.Add(1)
 	h.mu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.ctx, cancel)
+	finish := func() { stop(); cancel(); h.requests.Done() }
+	streaming := false
+	defer func() {
+		if !streaming {
+			finish()
+		}
+	}()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.endpoint, bytes.NewReader(frame))
 	if err != nil {
@@ -127,6 +143,12 @@ func (h *HTTP) Write(ctx context.Context, frame []byte) error {
 		h.setSessionID(id)
 	}
 
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if resp.StatusCode < 400 && resp.StatusCode != http.StatusAccepted && mediaType == contentSSE {
+		streaming = true
+		go func() { defer finish(); h.drainStream(resp) }()
+		return nil
+	}
 	return h.handleResponse(resp)
 }
 
@@ -155,7 +177,8 @@ func (h *HTTP) Close() error {
 	h.mu.Unlock()
 
 	close(h.done)
-	h.streams.Wait()
+	h.cancel() // Interrupt idle response-body reads as well as pending POSTs.
+	h.requests.Wait()
 	close(h.frames)
 
 	if sessionID == "" {
@@ -179,23 +202,8 @@ func (h *HTTP) handleResponse(resp *http.Response) error {
 		return nil
 	}
 
-	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil {
-		mediaType = contentJSON
-	}
-
-	switch mediaType {
-	case contentSSE:
-		// The stream stays open, so it is drained in the background and this
-		// call returns as soon as the frame is on its way.
-		h.streams.Add(1)
-		go h.drainStream(resp)
-		return nil
-
-	default:
-		defer resp.Body.Close()
-		return h.readSingleFrame(resp.Body)
-	}
+	defer resp.Body.Close()
+	return h.readSingleFrame(resp.Body)
 }
 
 func (h *HTTP) readSingleFrame(body io.Reader) error {
@@ -214,7 +222,6 @@ func (h *HTTP) readSingleFrame(body io.Reader) error {
 
 // drainStream consumes an event stream until the server closes it.
 func (h *HTTP) drainStream(resp *http.Response) {
-	defer h.streams.Done()
 	defer resp.Body.Close()
 
 	reader := newSSEReader(resp.Body)
@@ -310,10 +317,15 @@ func (h *HTTP) setSessionID(id string) {
 }
 
 func (h *HTTP) deleteSession(sessionID string) error {
-	req, err := http.NewRequest(http.MethodDelete, h.endpoint, nil)
+	// Session deletion is best-effort cleanup, not an unbounded model/tool call.
+	// Reuse the local child shutdown grace as the cleanup budget.
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, h.endpoint, nil)
 	if err != nil {
 		return nil
 	}
+	h.applyHeaders(req)
 	req.Header.Set(headerSessionID, sessionID)
 
 	resp, err := h.client.Do(req)
