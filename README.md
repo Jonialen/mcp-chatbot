@@ -8,12 +8,12 @@ The Model Context Protocol is implemented **directly over JSON-RPC 2.0**, with
 no MCP SDK. Every frame exchanged with a server is built, parsed and logged by
 this codebase.
 
-Course project for CC3067 Redes — Universidad del Valle de Guatemala.
+Course project for CC3067 Redes, Universidad del Valle de Guatemala.
 
 ## Status
 
 Working end to end. The host connects to every server named in its
-configuration — local ones over stdio, remote ones over Streamable HTTP —
+configuration (local ones over stdio, remote ones over Streamable HTTP)
 exposes their tools to the model as one list, and runs the tool loop.
 
 See `docs/` for the assignment brief and the use case.
@@ -60,7 +60,7 @@ Then point the host at it:
 ```
 
 The image is built in two stages and ends at `distroless/static`, which carries
-root certificates and nothing else — no shell, no package manager. The
+root certificates and nothing else: no shell, no package manager. The
 certificates are the reason it is not built on `scratch`: `http_probe` opens TLS
 connections, and an image without a certificate bundle fails every one of them
 with an unverifiable-authority error that reads like a network fault.
@@ -182,12 +182,13 @@ Opening Logs with Tab does not change the logging detail. For redirected input o
 ## Classmates' servers
 
 Requirement 6 asks for two MCP servers written by other students. They are not
-vendored here — they are their authors' repositories, cloned under `peers/`,
+vendored here: they are their authors' repositories, cloned under `peers/`,
 which is ignored by git.
 
 | Server | Author | Language | Tools |
 | --- | --- | --- | --- |
-| `rrhh` | [NESHGP04/mcp-server-rrhh-construccion](https://github.com/NESHGP04/mcp-server-rrhh-construccion) | Python | 6 — HR management: employee lookup, vacation balances with carry-over, overtime pay by shift type, payroll and employment history |
+| `rrhh` | [NESHGP04/mcp-server-rrhh-construccion](https://github.com/NESHGP04/mcp-server-rrhh-construccion) | Python | 6. HR management: employee lookup, vacation balances with carry-over, overtime pay by shift type, payroll and employment history |
+| `hotel` | [JosFer720/hotel-mcp-server](https://github.com/JosFer720/hotel-mcp-server) | Python | 9. Hotel operations: availability, room assignment, overbooking risk, housekeeping scheduling and booking receipts |
 
 To set it up:
 
@@ -222,27 +223,32 @@ peers/hotel-mcp-server/.venv/bin/python -m pip install -e ./peers/hotel-mcp-serv
 cp -n peers/hotel-mcp-server/data/hotel.db peers/hotel-mcp-server/data/hotel-session.db
 ```
 
-Add this **entry inside the existing `mcpServers` object** in
-`config/servers.json` (keep the other entries). Replace `/absolute/path/to` with
-the full path to this host repository; JSON does not expand `$HOME` or `~`:
+The entry is already in `config/servers.json`:
 
 ```json
 "hotel": {
-  "command": "/absolute/path/to/peers/hotel-mcp-server/.venv/bin/python",
+  "command": "./.venv/bin/python",
   "args": ["-m", "hotel_mcp"],
-  "cwd": "/absolute/path/to/peers/hotel-mcp-server",
+  "cwd": "./peers/hotel-mcp-server",
   "env": [
-    "HOTEL_DB=/absolute/path/to/peers/hotel-mcp-server/data/hotel-session.db",
-    "HOTEL_EXPORT_DIR=/absolute/path/to/peers/hotel-mcp-server/comprobantes"
-  ],
-  "disabled": true
+    "HOTEL_DB=./data/hotel-session.db",
+    "HOTEL_EXPORT_DIR=./comprobantes"
+  ]
 }
 ```
 
-This host uses an **array of `KEY=VALUE` strings** for `env`, not the object in
-some upstream examples. No `transport` field is needed. Absolute paths avoid
-ambiguity when the child changes its working directory. The entry above is
-documentation only: it has not been inserted into your active configuration.
+Two details about those paths are worth knowing, because getting either wrong
+produces an error that points somewhere else.
+
+`cwd` is relative to this repository, but `command` is relative to `cwd`. A
+command written as `./peers/hotel-mcp-server/.venv/bin/python` alongside that
+`cwd` is looked for at `peers/hotel-mcp-server/peers/hotel-mcp-server/...` and
+fails with `no such file or directory` for a file that plainly exists. The `env`
+entries are read by the child after it has already moved, so they are relative to
+`cwd` as well.
+
+This host takes `env` as an array of `KEY=VALUE` strings, not the object some
+upstream examples use, and it needs no `transport` field.
 
 Run `go run ./cmd/host -tui`. Move to `hotel`, press Space to check it, uncheck
 other servers if you want hotel alone, then press Enter. With your Gemini key
@@ -293,9 +299,9 @@ A server with a `command` is launched as a child process and spoken to over
 stdio; one with a `url` is reached over Streamable HTTP. Nothing above the
 transport layer knows which is which.
 
-Those four servers are written in four different languages — TypeScript, Python
-and two in Go — and the host adapts to none of them. That is the protocol's own
-claim, and it is the point of the exercise.
+Those six servers are written in three different languages, by five different
+authors, and the host adapts to none of them. That is the protocol's own claim,
+and it is the point of the exercise.
 
 The label on the left becomes the prefix of that server's tools, which is how
 two servers that both publish `read_file` stay apart. `"disabled": true` parks
