@@ -4,6 +4,13 @@ Proyecto 1: Uso de un protocolo existente (Model Context Protocol)
 
 CC3067 Redes, Universidad del Valle de Guatemala
 
+Jonathan Alejandro Díaz Tahuite, carné 23837
+
+Repositorios:
+
+- Anfitrión y servidor remoto: <https://github.com/Jonialen/mcp-chatbot>
+- Servidor local propio: <https://github.com/Jonialen/brewops-mcp>
+
 ## Qué se construyó
 
 Un chatbot de consola que actúa como anfitrión MCP: lanza varios servidores del
