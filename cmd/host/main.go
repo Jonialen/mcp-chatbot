@@ -42,6 +42,7 @@ type options struct {
 	logDir     string
 	model      string
 	verbose    bool
+	tui        bool
 }
 
 func parseFlags() options {
@@ -50,17 +51,34 @@ func parseFlags() options {
 	flag.StringVar(&opts.logDir, "logs", "logs", "directory for the JSON-RPC frame log")
 	flag.StringVar(&opts.model, "model", "", "model to use (default "+gemini.DefaultModel+")")
 	flag.BoolVar(&opts.verbose, "verbose", false, "show whole JSON-RPC frames on screen")
+	flag.BoolVar(&opts.tui, "tui", false, "open the interactive terminal UI")
 	flag.Parse()
 	return opts
 }
 
 func run(opts options) error {
+	return runWithSelector(opts, selectServers)
+}
+
+func runWithSelector(opts options, selectServers func(context.Context, *config.Config) (*config.Config, error)) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return err
+	}
+	if opts.tui {
+		cfg, err = selectServers(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if cfg == nil || ctx.Err() != nil {
+			return nil // Cancel before logging, model initialization, or server startup.
+		}
+		if len(cfg.Enabled()) == 0 {
+			return fmt.Errorf("select at least one MCP server")
+		}
 	}
 
 	logFile, logPath, err := openLog(opts.logDir)
@@ -69,24 +87,30 @@ func run(opts options) error {
 	}
 	defer logFile.Close()
 
+	var screen io.Writer = os.Stdout
+	var feed *tuiFeed
+	if opts.tui {
+		feed = &tuiFeed{}
+		screen = feed
+	}
 	log := mcplog.New(mcplog.Options{
 		File:    logFile,
-		Screen:  os.Stdout,
+		Screen:  screen,
 		Verbose: opts.verbose,
 	})
 
 	provider, err := gemini.New(ctx, gemini.Config{
 		Model: opts.model,
 		OnFallback: func(from, to string) {
-			fmt.Printf("\n  the free allowance of %s is spent for today; continuing on %s\n\n", from, to)
+			fmt.Fprintf(screen, "\n  the free allowance of %s is spent for today; continuing on %s\n\n", from, to)
 		},
 		OnWait: func(model string, delay time.Duration, requested bool) {
 			if requested {
-				fmt.Printf("  %s asked for %s before the next attempt; waiting\n",
+				fmt.Fprintf(screen, "  %s asked for %s before the next attempt; waiting\n",
 					model, delay.Round(time.Second))
 				return
 			}
-			fmt.Printf("  %s is busy; retrying in %s\n", model, delay.Round(time.Second))
+			fmt.Fprintf(screen, "  %s is busy; retrying in %s\n", model, delay.Round(time.Second))
 		},
 	})
 	if err != nil {
@@ -111,9 +135,16 @@ func run(opts options) error {
 	bot := agent.New(agent.Config{
 		Provider: provider,
 		Tools:    reg,
-		Observe:  progressReporter(os.Stdout),
+		Observe:  progressReporter(screen),
 	})
 
+	if opts.tui {
+		for _, c := range connections {
+			fmt.Fprintln(feed, describe(c, elapsed))
+		}
+		fmt.Fprintf(feed, "Frame log: %s\n", logPath)
+		return runTUI(ctx, bot, reg, log, feed, provider.Model())
+	}
 	return repl(ctx, bufio.NewScanner(os.Stdin), os.Stdout, bot, reg, log)
 }
 
