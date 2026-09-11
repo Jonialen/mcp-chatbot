@@ -1,23 +1,28 @@
 # Especificación de los servidores MCP desarrollados
 
-Proyecto 1 — CC3067 Redes, Universidad del Valle de Guatemala.
+Proyecto 1, CC3067 Redes, Universidad del Valle de Guatemala.
 
-Este documento describe los dos servidores MCP implementados para el proyecto:
-su transporte, su ciclo de vida, sus métodos, y los parámetros de cada
-herramienta que publican. Los esquemas y los frames que aparecen aquí fueron
-capturados de ejecuciones reales de los servidores, no redactados a mano.
+Este documento describe los dos servidores MCP implementados para este proyecto.
+De cada uno se detalla su transporte, su ciclo de vida, sus métodos y los
+parámetros de cada herramienta que publica. Los esquemas y los frames que
+aparecen aquí fueron capturados de ejecuciones reales de los servidores, no
+redactados a mano.
+
+Los servidores de compañeros que el anfitrión también consume quedan fuera de
+este documento: están especificados por sus propios autores, en sus
+repositorios.
 
 | Servidor | Repositorio | Transporte | Herramientas |
 | --- | --- | --- | --- |
-| **BrewOps** | [Jonialen/brewops-mcp](https://github.com/Jonialen/brewops-mcp) | stdio | 9 |
-| **netprobe** | [Jonialen/mcp-chatbot](https://github.com/Jonialen/mcp-chatbot) (`cmd/netprobe`) | Streamable HTTP | 3 |
+| BrewOps | [Jonialen/brewops-mcp](https://github.com/Jonialen/brewops-mcp) | stdio | 9 |
+| netprobe | [Jonialen/mcp-chatbot](https://github.com/Jonialen/mcp-chatbot) (`cmd/netprobe`) | Streamable HTTP | 3 |
 
 Ambos implementan el protocolo directamente sobre JSON-RPC 2.0, sin utilizar un
 SDK de MCP.
 
 ---
 
-## 1. Fundamento común: JSON-RPC 2.0
+## Fundamento común: JSON-RPC 2.0
 
 MCP no define un formato de mensajes propio: utiliza JSON-RPC 2.0 en la capa de
 aplicación. Los tres tipos de mensaje comparten una misma forma en el cable y se
@@ -26,8 +31,8 @@ distinguen únicamente por qué campos están presentes.
 | Tipo | `method` | `id` | Se responde |
 | --- | --- | --- | --- |
 | Petición | sí | sí | sí |
-| Notificación | sí | **no** | **nunca** |
-| Respuesta | no | sí | — |
+| Notificación | sí | no | nunca |
+| Respuesta | no | sí | No aplica |
 
 ```json
 {
@@ -42,7 +47,7 @@ Un decodificador no puede saber de antemano qué tipo de mensaje ha llegado, por
 lo que la clasificación ocurre después de deserializar. Responder a una
 notificación es una violación del protocolo, no una cortesía.
 
-### 1.1 Códigos de error
+### Códigos de error
 
 Se utilizan los códigos estándar de JSON-RPC 2.0:
 
@@ -54,7 +59,7 @@ Se utilizan los códigos estándar de JSON-RPC 2.0:
 | `-32602` | Invalid params | Parámetros malformados, o una herramienta que el servidor nunca publicó. |
 | `-32603` | Internal error | Fallo al serializar un resultado. |
 
-### 1.2 Distinción crítica: fallo de protocolo contra fallo de herramienta
+### Distinción crítica: fallo de protocolo contra fallo de herramienta
 
 Esta distinción es la decisión de diseño más importante del protocolo y ambos
 servidores la respetan.
@@ -62,10 +67,10 @@ servidores la respetan.
 | Situación | Cómo viaja |
 | --- | --- |
 | Método desconocido, parámetros inválidos, herramienta inexistente | Objeto `error` de JSON-RPC |
-| **Una herramienta se ejecutó y falló** | **Respuesta exitosa con `result.isError: true`** |
+| Una herramienta se ejecutó y falló | Respuesta exitosa con `result.isError: true` |
 
 El motivo no es estilístico. El fallo de una herramienta está dirigido al
-**modelo**, para que lo lea y elija otro camino. Si viajara como error de
+modelo, para que lo lea y elija otro camino. Si viajara como error de
 protocolo, el cliente lo trataría como excepción y la conversación terminaría
 por un problema que el modelo podía haber resuelto.
 
@@ -80,9 +85,9 @@ por un problema que el modelo podía haber resuelto.
 }
 ```
 
-### 1.3 Ciclo de vida
+### Ciclo de vida
 
-El handshake son **tres** mensajes, no dos:
+El handshake son tres mensajes, no dos:
 
 ```
 cliente → servidor    initialize                      (petición)
@@ -93,13 +98,13 @@ cliente → servidor    notifications/initialized       (notificación)
 El tercer mensaje no es opcional: un servidor puede rechazar peticiones hasta
 recibirlo, y omitirlo produce una sesión que parece conectada y no responde.
 
-**Negociación de versión.** Ambos servidores devuelven la versión que el cliente
+Negociación de versión. Ambos servidores devuelven la versión que el cliente
 solicitó cuando pueden hablarla, en lugar de imponer la suya. Un cliente
 construido contra una revisión anterior habla una superficie de herramientas que
 no ha cambiado, y rechazarlo por el número costaría interoperabilidad sin ganar
 nada.
 
-### 1.4 Métodos implementados
+### Métodos implementados
 
 | Método | Tipo | Descripción |
 | --- | --- | --- |
@@ -113,7 +118,7 @@ declaran únicamente la capacidad `tools`.
 
 ---
 
-## 2. BrewOps
+## BrewOps
 
 Servidor de conocimiento de una cafetería de especialidad: catálogo, recetas,
 perfiles de tueste y registro de preparaciones.
@@ -124,14 +129,14 @@ correctas; una cafetería que necesita la misma taza dos veces no puede usar
 cifras que parecen correctas. Todas las herramientas calculan a partir de los
 registros del negocio.
 
-### 2.1 Transporte y ejecución
+### Transporte y ejecución
 
 | | |
 | --- | --- |
 | Transporte | stdio, JSON-RPC delimitado por saltos de línea |
 | Invocación | `brewops [-db ruta]` |
 | Entrada | frames en `stdin` |
-| Salida | frames en `stdout`, **exclusivamente** |
+| Salida | frames en `stdout`, exclusivamente |
 | Diagnóstico | `stderr` |
 | Persistencia | SQLite (`modernc.org/sqlite`, Go puro, sin cgo) |
 | Versión de protocolo | `2025-06-18` |
@@ -139,13 +144,13 @@ registros del negocio.
 `stdout` transporta frames y nada más. Una sola línea ajena en ese flujo corrompe
 el stream para el cliente, razón por la cual todo diagnóstico va a `stderr`.
 
-**Instalación:**
+Instalación:
 
 ```sh
 go install github.com/Jonialen/brewops-mcp@latest
 ```
 
-**Configuración en un anfitrión:**
+Configuración en un anfitrión:
 
 ```json
 {
@@ -161,7 +166,7 @@ go install github.com/Jonialen/brewops-mcp@latest
 En el primer arranque crea y siembra la base de datos, de modo que las
 herramientas tienen con qué responder de inmediato.
 
-### 2.2 Herramientas
+### Herramientas
 
 #### `compare_roast_batches`
 
@@ -257,7 +262,7 @@ Work a recipe out for a specific amount and return a full brew card: dose, water
 | `method` | string | sí | Brewing method. |
 | `water_grams` | number | no | Grams of water to brew. Give this or dose_grams, not both. |
 
-### 2.3 Ejemplo completo
+### Ejemplo completo
 
 Petición:
 
@@ -296,7 +301,7 @@ la balanza.
 
 ---
 
-## 3. netprobe
+## netprobe
 
 Servidor remoto de diagnóstico de red. Publica herramientas que resuelven
 nombres, abren conexiones TCP e intercambian peticiones HTTP, reportando lo que
@@ -308,7 +313,7 @@ Al ser el único componente genuinamente remoto del proyecto, lo que observa
 constituye evidencia sobre las capas inferiores al protocolo, en lugar de una
 descripción de ellas.
 
-### 3.1 Transporte y endpoints
+### Transporte y endpoints
 
 | | |
 | --- | --- |
@@ -323,7 +328,7 @@ descripción de ellas.
 | `DELETE /mcp` | Termina la sesión indicada en `Mcp-Session-Id` |
 | `GET /mcp` | `405`. Este servidor no envía mensajes por iniciativa propia, y mantener una conexión abierta para mensajes que nunca llegan no es gratis |
 
-**Cabeceras.** La petición debe declarar ambos tipos aceptables, porque la
+Cabeceras. La petición debe declarar ambos tipos aceptables, porque la
 respuesta puede ser un frame único o un flujo de eventos:
 
 ```
@@ -331,7 +336,7 @@ Content-Type: application/json
 Accept: application/json, text/event-stream
 ```
 
-**Sesión.** El servidor emite un identificador de sesión en la respuesta a
+Sesión. El servidor emite un identificador de sesión en la respuesta a
 `initialize`, y el cliente debe reenviarlo en toda petición posterior:
 
 ```
@@ -347,7 +352,7 @@ Mcp-Session-Id: <identificador emitido>
 MCP-Protocol-Version: 2025-06-18
 ```
 
-**Códigos de estado:**
+Códigos de estado:
 
 | Estado | Cuándo |
 | --- | --- |
@@ -355,7 +360,7 @@ MCP-Protocol-Version: 2025-06-18
 | `202` | El frame era una notificación; el cuerpo vacío es deliberado |
 | `400` | Frame malformado |
 
-### 3.2 Herramientas
+### Herramientas
 
 #### `dns_lookup`
 
@@ -382,7 +387,7 @@ Open a TCP connection to one or more ports on a host and report which accepted, 
 | `host` | string | sí | The host to connect to. |
 | `ports` | array&lt;integer&gt; | sí | The TCP ports to try. |
 
-### 3.3 Ejemplo completo
+### Ejemplo completo
 
 Handshake real capturado del servidor:
 
@@ -425,13 +430,13 @@ github.com resolved in 132ms
   IPv6: (none)
 ```
 
-### 3.4 Restricciones de seguridad
+### Restricciones de seguridad
 
 Una herramienta que realiza peticiones de red por cuenta de quien la invoca es
 una puerta hacia todo lo que el servidor alcanza. Desplegado en la nube, eso
 incluye el servicio de metadatos del proveedor y el resto de la red privada.
 
-Antes de cualquier operación, el destino se resuelve y se rechaza si **alguna**
+Antes de cualquier operación, el destino se resuelve y se rechaza si alguna
 de sus direcciones cae en un rango interno:
 
 | Rango | Ejemplo | Motivo |
@@ -439,14 +444,14 @@ de sus direcciones cae en un rango interno:
 | Loopback | `127.0.0.1`, `::1` | El propio servidor |
 | Privado | `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12` | Red interna |
 | Link-local | `169.254.169.254` | Metadatos de nube |
-| No especificado | `0.0.0.0` | — |
+| No especificado | `0.0.0.0` | Sin destino |
 
 También se rechaza `localhost` por nombre y todo esquema que no sea `http` o
 `https`.
 
 ---
 
-## 4. Resumen de interoperabilidad
+## Resumen de interoperabilidad
 
 El anfitrión desarrollado en este proyecto conecta simultáneamente servidores
 escritos en tres lenguajes distintos, por dos empresas distintas, sobre dos

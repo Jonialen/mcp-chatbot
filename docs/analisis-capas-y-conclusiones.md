@@ -1,6 +1,6 @@
 # Análisis por capas y conclusiones
 
-Proyecto 1 — CC3067 Redes, Universidad del Valle de Guatemala.
+Proyecto 1, CC3067 Redes, Universidad del Valle de Guatemala.
 
 Este documento explica qué ocurre en las capas de enlace, red, transporte y
 aplicación cuando el anfitrión se comunica con un servidor MCP, y cierra con las
@@ -9,22 +9,20 @@ conclusiones del proyecto.
 Todos los números y descriptores que aparecen aquí fueron medidos sobre el
 sistema en ejecución, no estimados.
 
----
-
-## 1. El proyecto tiene dos transportes, y dan respuestas distintas
+## El proyecto tiene dos transportes, y dan respuestas distintas
 
 MCP define dos transportes, y ambos están implementados en este proyecto:
 
 | Transporte | Servidores | Dónde corre el servidor |
 | --- | --- | --- |
-| **stdio** | `brewops`, `filesystem`, `git` | Proceso hijo en la misma máquina |
-| **Streamable HTTP** | `netprobe` | Contenedor, accesible por red |
+| stdio | `brewops`, `filesystem`, `git`, `rrhh`, `hotel` | Proceso hijo en la misma máquina |
+| Streamable HTTP | `netprobe` | Contenedor, accesible por red |
 
 La pregunta "qué sucede en cada capa" tiene respuestas radicalmente distintas
-para cada uno, y ese contraste es el hallazgo central de este análisis: **un
-transporte no usa la pila de red en absoluto.**
+para cada uno, y ese contraste es el hallazgo central de este análisis: uno de
+los transportes no usa la pila de red en absoluto.
 
-### 1.1 Método
+### Método
 
 La evidencia se obtuvo inspeccionando los procesos en ejecución:
 
@@ -36,9 +34,7 @@ La evidencia se obtuvo inspeccionando los procesos en ejecución:
 - El propio servidor `netprobe`, cuyas herramientas reportan lo que observan al
   resolver nombres, abrir conexiones TCP e intercambiar peticiones HTTP.
 
----
-
-## 2. Transporte stdio: las capas que no existen
+## Transporte stdio: las capas que no existen
 
 Un servidor stdio se ejecuta como proceso hijo del anfitrión. Los frames viajan
 por la entrada y salida estándar del proceso.
@@ -53,22 +49,22 @@ PID 187356
   conexiones de red:  0
 ```
 
-Los descriptores 0 y 1 apuntan a **pipes anónimos del kernel**, identificados por
-su número de inodo. El proceso no tiene un solo socket abierto.
+Los descriptores 0 y 1 apuntan a pipes anónimos del kernel, identificados por su
+número de inodo. El proceso no tiene un solo socket abierto.
 
-Esto significa que, para los tres servidores locales del proyecto:
+Esto significa que, para los cinco servidores locales del proyecto:
 
 | Capa | Qué ocurre |
 | --- | --- |
-| **Enlace** | Nada. No hay trama, no hay dirección MAC, no hay medio físico. |
-| **Red** | Nada. No hay paquete IP, no hay direccionamiento, no hay enrutamiento. |
-| **Transporte** | Nada en el sentido TCP/IP. No hay puerto, ni número de secuencia, ni control de flujo por ventana. |
-| **Aplicación** | JSON-RPC 2.0 sobre un flujo de bytes. |
+| Enlace | Nada. No hay trama, no hay dirección MAC, no hay medio físico. |
+| Red | Nada. No hay paquete IP, no hay direccionamiento, no hay enrutamiento. |
+| Transporte | Nada en el sentido TCP/IP. No hay puerto, ni número de secuencia, ni control de flujo por ventana. |
+| Aplicación | JSON-RPC 2.0 sobre un flujo de bytes. |
 
 Lo que sí existe, y hace el trabajo que en el caso remoto harían esas capas, es
-un **pipe del kernel**: un búfer en memoria del sistema operativo, con
-transferencia fiable y ordenada garantizada por el propio kernel y control de
-flujo por bloqueo cuando el búfer se llena.
+un pipe del kernel: un búfer en memoria del sistema operativo, con transferencia
+fiable y ordenada garantizada por el propio kernel y control de flujo por
+bloqueo cuando el búfer se llena.
 
 Esta última propiedad no es teórica y tuvo una consecuencia concreta durante el
 desarrollo. Un servidor MCP escribe sus diagnósticos a `stderr`; si el anfitrión
@@ -78,24 +74,30 @@ saldrá. El síntoma aparenta ser un interbloqueo del protocolo y no lo es: es
 control de flujo de la capa que sustituye al transporte. El anfitrión dedica una
 goroutine exclusivamente a drenar `stderr` por esta razón.
 
-### 2.1 Delimitación de mensajes
+### Delimitación de mensajes
 
 Un pipe entrega un flujo de bytes sin fronteras: nada indica dónde termina un
 mensaje y empieza el siguiente. El transporte stdio de MCP resuelve esto
-**delimitando cada frame con un salto de línea**, lo que impone dos reglas:
+delimitando cada frame con un salto de línea, lo que impone dos reglas:
 
 1. Un frame no puede contener saltos de línea sin escapar.
-2. `stdout` transporta frames y **nada más**. Una sola línea de log en ese flujo
+2. `stdout` transporta frames y nada más. Una sola línea de log en ese flujo
    corrompe el stream para el cliente.
 
----
+### El cierre también es de esta capa
 
-## 3. Transporte Streamable HTTP: la pila completa
+Un servidor que no responde deja al anfitrión bloqueado escribiendo en un pipe
+cuyo búfer ya está lleno. Cerrar el transporte tiene que poder interrumpir esa
+escritura, porque de lo contrario apagar el chatbot depende de la buena voluntad
+de un proceso que precisamente dejó de colaborar. El transporte impone un plazo
+al cierre y mata el proceso hijo si expira.
+
+## Transporte Streamable HTTP: la pila completa
 
 El servidor `netprobe` corre en un contenedor y se alcanza por red. Aquí sí
 participan las cuatro capas.
 
-### 3.1 Capa de enlace
+### Capa de enlace
 
 Docker crea una topología de enlace virtual completa:
 
@@ -108,26 +110,26 @@ interfaces:    vethf9aa8f5@if2, veth59e8dc1@if2
 MTU:           1500
 ```
 
-El contenedor tiene su propia **dirección MAC** y se conecta mediante un par
-`veth` —dos interfaces virtuales unidas extremo a extremo— a un **bridge** que
-actúa como conmutador de capa 2. El bridge también tiene su propia MAC. Es una
-red Ethernet conmutada, implementada enteramente en software.
+El contenedor tiene su propia dirección MAC y se conecta mediante un par `veth`,
+dos interfaces virtuales unidas extremo a extremo, a un bridge que actúa como
+conmutador de capa 2. El bridge también tiene su propia MAC. Es una red Ethernet
+conmutada, implementada enteramente en software.
 
-El **MTU de 1500 bytes** es el dato de esta capa con consecuencias medibles
-arriba, y se trata en la sección de transporte.
+El MTU de 1500 bytes es el dato de esta capa con consecuencias medibles arriba,
+y se trata en la sección de transporte.
 
-### 3.2 Capa de red
+### Capa de red
 
 | | |
 | --- | --- |
 | Direccionamiento | IPv4 privado, `172.23.0.0/16` |
 | Gateway | `172.23.0.1`, la interfaz del bridge en el host |
-| Traducción | El host publica `0.0.0.0:8961` y lo redirige a `172.23.0.2:8080` |
+| Traducción | El host publica `0.0.0.0:8080` y lo redirige a `172.23.0.2:8080` |
 
-La publicación de puertos de Docker es **NAT**: el contenedor no es directamente
-alcanzable desde fuera, y la traducción de direcciones ocurre en el host. Esto es
-la misma mecánica que cualquier servicio en la nube usa para exponer un
-contenedor con dirección privada al Internet público.
+La publicación de puertos de Docker es NAT: el contenedor no es directamente
+alcanzable desde fuera, y la traducción de direcciones ocurre en el host. Es la
+misma mecánica que cualquier servicio en la nube usa para exponer un contenedor
+con dirección privada al Internet público.
 
 Cuando `netprobe` resuelve un nombre, esta capa se vuelve visible en la salida de
 la herramienta:
@@ -138,12 +140,12 @@ github.com resolved in 132ms
   IPv6: (none)
 ```
 
-### 3.3 Capa de transporte
+### Capa de transporte
 
 TCP, y el servidor escucha explícitamente:
 
 ```
-LISTEN  0  4096  0.0.0.0:8961  0.0.0.0:*
+LISTEN  0  4096  0.0.0.0:8080  0.0.0.0:*
 ```
 
 La cola de conexiones pendientes es de 4096. La herramienta `tcp_probe` mide el
@@ -154,11 +156,11 @@ TCP probe of github.com
   443    open    (70ms, local 172.23.0.2:41288)
 ```
 
-Los 70 ms son el tiempo del *three-way handshake* completo, y el puerto local
+Los 70 ms son el tiempo del three-way handshake completo, y el puerto local
 efímero `41288` es el que el kernel asignó a ese extremo de la conexión.
 
-**Segmentación, medida sobre frames reales.** El registro del anfitrión muestra
-la distribución de tamaños de los mensajes MCP:
+Segmentación, medida sobre frames reales. El registro del anfitrión muestra la
+distribución de tamaños de los mensajes MCP:
 
 ```
 19 frames | mediana 204 B | máximo 13,077 B
@@ -167,16 +169,16 @@ la distribución de tamaños de los mensajes MCP:
 El máximo es la respuesta a `tools/list` del servidor de filesystem, que publica
 14 herramientas con sus esquemas JSON Schema completos. Con un MTU de 1500 bytes,
 el MSS resultante es de 1460 bytes (1500 menos 20 de cabecera IP y 20 de cabecera
-TCP), de modo que ese frame requiere **10 segmentos TCP**. El mensaje mediano de
-204 bytes entra en uno solo.
+TCP), de modo que ese frame requiere 10 segmentos TCP. El mensaje mediano de 204
+bytes entra en uno solo.
 
 Esto ilustra una diferencia real entre los dos transportes: por loopback el MTU
 es de 65,536 bytes, y ese mismo frame de 13 KB viaja en un único segmento.
 
-### 3.4 Capa de aplicación
+### Capa de aplicación
 
-Sobre TCP hay **tres protocolos apilados**, y la herramienta `http_probe` los
-reporta todos:
+Sobre TCP hay tres protocolos apilados, y la herramienta `http_probe` los reporta
+todos:
 
 ```
 HEAD https://github.com
@@ -197,29 +199,27 @@ TCP/IP, que es el que la práctica sigue, todo esto es capa de aplicación.
 
 El certificado del servidor es lo que permite verificar la identidad del extremo.
 Este detalle tuvo una consecuencia práctica en el proyecto: la imagen del
-contenedor **no puede construirse sobre `scratch`**, porque una imagen sin
+contenedor no puede construirse sobre `scratch`, porque una imagen sin
 certificados raíz falla toda conexión TLS con un error de autoridad no
 verificable que aparenta ser un fallo de red.
 
----
-
-## 4. Qué hace MCP en la capa de aplicación
+## Qué hace MCP en la capa de aplicación
 
 Esto es común a ambos transportes, y es donde vive el protocolo implementado.
 
-### 4.1 Correlación de peticiones y respuestas
+### Correlación de peticiones y respuestas
 
-JSON-RPC permite tener varias peticiones en vuelo simultáneamente. Cada una
-lleva un `id` que la respuesta debe devolver sin modificar, y el cliente mantiene
-una tabla que asocia cada `id` pendiente con quien espera esa respuesta.
+JSON-RPC permite tener varias peticiones en vuelo simultáneamente. Cada una lleva
+un `id` que la respuesta debe devolver sin modificar, y el cliente mantiene una
+tabla que asocia cada `id` pendiente con quien espera esa respuesta.
 
 Esta es la misma función que cumple el número de secuencia en TCP, resuelta de
 nuevo un nivel más arriba: el transporte garantiza que los bytes lleguen
-ordenados, pero no que las *respuestas* lleguen en el orden en que se pidieron.
-El servidor puede responder la tercera petición antes que la primera, y sin la
+ordenados, pero no que las respuestas lleguen en el orden en que se pidieron. El
+servidor puede responder la tercera petición antes que la primera, y sin la
 correlación por `id` cada respuesta llegaría al solicitante equivocado.
 
-### 4.2 Cabeceras propias del transporte HTTP
+### Cabeceras propias del transporte HTTP
 
 El transporte HTTP añade dos cabeceras que el transporte stdio no necesita:
 
@@ -229,10 +229,10 @@ El transporte HTTP añade dos cabeceras que el transporte stdio no necesita:
 | `MCP-Protocol-Version` | La versión acordada, enviada a partir de `initialize`. |
 
 La necesidad de la primera ilustra bien la diferencia entre transportes: en stdio
-la sesión **es** el proceso, y termina cuando el proceso termina. Sobre HTTP, que
-no tiene estado, la sesión debe construirse explícitamente.
+la sesión es el proceso, y termina cuando el proceso termina. Sobre HTTP, que no
+tiene estado, la sesión debe construirse explícitamente.
 
-### 4.3 Terminación de sesión
+### Terminación de sesión
 
 | Transporte | Cómo termina |
 | --- | --- |
@@ -240,77 +240,86 @@ no tiene estado, la sesión debe construirse explícitamente.
 | HTTP | El cliente envía `DELETE /mcp` con el identificador de sesión |
 
 En el segundo caso la notificación es necesaria porque una sesión que el servidor
-sigue creyendo abierta retiene recursos del otro lado indefinidamente.
+sigue creyendo abierta retiene recursos del otro lado indefinidamente. Ese
+`DELETE` también lleva su propio plazo: un servidor que no responde al cierre no
+puede impedir que el cliente termine.
 
----
-
-## 5. Comparación
+## Comparación
 
 | Capa | stdio | Streamable HTTP |
 | --- | --- | --- |
-| Enlace | — | Ethernet virtual, par `veth` sobre bridge, MTU 1500 |
-| Red | — | IPv4 privado con NAT, `172.23.0.2` |
+| Enlace | No aplica | Ethernet virtual, par `veth` sobre bridge, MTU 1500 |
+| Red | No aplica | IPv4 privado con NAT, `172.23.0.2` |
 | Transporte | Pipe del kernel: fiable, ordenado, control de flujo por bloqueo | TCP: puertos, handshake de 70 ms medido, segmentación por MSS de 1460 B |
-| Aplicación | JSON-RPC 2.0 delimitado por saltos de línea | TLS 1.3 + HTTP/2 + JSON-RPC 2.0 |
+| Aplicación | JSON-RPC 2.0 delimitado por saltos de línea | TLS 1.3 más HTTP/2 más JSON-RPC 2.0 |
 | Sesión | El proceso hijo | `Mcp-Session-Id` explícito |
 | Alcance | Misma máquina | Cualquier red |
 
-La conclusión de la comparación es que **MCP define la misma semántica sobre dos
-pilas que no comparten nada por debajo de la capa de aplicación**. El cliente
+La conclusión de la comparación es que MCP define la misma semántica sobre dos
+pilas que no comparten nada por debajo de la capa de aplicación. El cliente
 JSON-RPC implementado en este proyecto no distingue una de otra: ambas
-implementan la misma interfaz de tres operaciones —escribir un frame, leer un
-frame, cerrar— y todo lo que está por encima es idéntico.
+implementan la misma interfaz de tres operaciones, escribir un frame, leer un
+frame y cerrar, y todo lo que está por encima es idéntico.
 
----
+## Conclusiones
 
-## 6. Conclusiones
-
-**El protocolo cumple lo que promete, y se puede comprobar.** El enunciado abre
+El protocolo cumple lo que promete, y se puede comprobar. El enunciado abre
 señalando que cada empresa define su propia forma de integrar herramientas y que
 por eso no hay interoperabilidad. El anfitrión desarrollado conecta
-simultáneamente cuatro servidores escritos en tres lenguajes —TypeScript, Python
-y Go— por dos organizaciones distintas, sobre dos transportes distintos, y le
-entrega sus 38 herramientas a un modelo de Google. No se escribió una sola línea
+simultáneamente seis servidores escritos en tres lenguajes, Go, TypeScript y
+Python, por cinco autores distintos, sobre dos transportes distintos, y le
+entrega sus 53 herramientas a un modelo de Google. No se escribió una sola línea
 de adaptación para ninguno. Que los servidores oficiales de Anthropic funcionen
-con un modelo que no es de Anthropic es la demostración más directa del argumento.
+con un modelo que no es de Anthropic es la demostración más directa del
+argumento.
 
-**Implementar el protocolo a mano enseña lo que un SDK esconde.** La decisión de
+Implementar el protocolo a mano enseña lo que un SDK esconde. La decisión de
 escribir JSON-RPC directamente, sin SDK de MCP, obligó a resolver problemas que
 de otro modo habrían quedado invisibles: la correlación de identificadores, la
 distinción entre un fallo de protocolo y un fallo de herramienta, el drenaje de
 `stderr` para no bloquear al servidor, la negociación de versión con servidores
-de revisiones anteriores. Ninguno de estos aparece en la documentación como una
-advertencia destacada; todos aparecen al primer contacto con un servidor real.
+de revisiones anteriores, el plazo de cierre cuando el otro extremo deja de
+responder. Ninguno de estos aparece en la documentación como una advertencia
+destacada; todos aparecen al primer contacto con un servidor real.
 
-**La distinción más importante del protocolo es también la más fácil de
-implementar mal.** Una herramienta que se ejecutó y falló no viaja como error de
-JSON-RPC, sino como respuesta exitosa con `isError`. El destinatario de ese
-fallo es el modelo, que puede leerlo y elegir otro camino; tratarlo como
-excepción termina la conversación por un problema que era recuperable. El primer
-servidor oficial contra el que se probó el cliente confirmó esta distinción en la
-primera llamada.
+La distinción más importante del protocolo es también la más fácil de
+implementar mal. Una herramienta que se ejecutó y falló no viaja como error de
+JSON-RPC, sino como respuesta exitosa con `isError`. El destinatario de ese fallo
+es el modelo, que puede leerlo y elegir otro camino; tratarlo como excepción
+termina la conversación por un problema que era recuperable. El primer servidor
+oficial contra el que se probó el cliente confirmó esta distinción en la primera
+llamada.
 
-**Las capas inferiores solo son observables cuando existen.** El resultado más
-instructivo del análisis fue descubrir que tres de los cuatro servidores no usan
+Las capas inferiores solo son observables cuando existen. El resultado más
+instructivo del análisis fue descubrir que cinco de los seis servidores no usan
 la pila de red en absoluto: cero sockets, cero conexiones, dos pipes del kernel.
 Un análisis por capas de esos servidores no es un análisis corto, es un análisis
 vacío. El valor pedagógico está justamente en el contraste con el servidor
-remoto, porque muestra qué trabajo desaparece —y quién lo hace en su lugar—
+remoto, porque muestra qué trabajo desaparece, y quién lo hace en su lugar,
 cuando no hay red de por medio.
 
-**Las decisiones de infraestructura tienen consecuencias en la capa de
-aplicación.** Elegir `scratch` como imagen base habría producido un contenedor
-funcional en todo salvo en las conexiones TLS, fallando con un error que aparenta
-ser de red y no lo es. Compilar sin `CGO_ENABLED=0` habría producido una imagen
-que construye correctamente y falla al arrancar. Ninguno de los dos errores se
-manifiesta donde se origina.
+Las decisiones de infraestructura tienen consecuencias en la capa de aplicación.
+Elegir `scratch` como imagen base habría producido un contenedor funcional en
+todo salvo en las conexiones TLS, fallando con un error que aparenta ser de red y
+no lo es. Compilar sin `CGO_ENABLED=0` habría producido una imagen que construye
+correctamente y falla al arrancar. Ninguno de los dos errores se manifiesta donde
+se origina.
 
-**Lo que se haría distinto.** La implementación cubre únicamente la superficie de
+Integrar el trabajo de otros es una prueba distinta a escribirlo. Los dos
+servidores de compañeros se agregaron pegando un bloque en un archivo de
+configuración, sin tocar una línea del anfitrión, que es exactamente lo que el
+formato declarativo promete. Pero el primero falló al arrancar por una ruta
+relativa que se resolvía contra el directorio de trabajo del proceso hijo y no
+contra el del anfitrión, y el segundo pareció no responder hasta que se notó que
+la prueba le cerraba la entrada estándar antes de que pudiera contestar. Ambos
+fallos estaban del lado del integrador, no del autor.
+
+Lo que se haría distinto. La implementación cubre únicamente la superficie de
 herramientas del protocolo; `resources` y `prompts` quedaron fuera
 deliberadamente, y un anfitrión completo debería soportarlas. El transporte HTTP
 implementa la lectura de flujos de eventos pero el servidor propio siempre
 responde con un frame único, de modo que esa ruta está probada contra un servidor
 de prueba y no contra uno que realmente transmita por etapas. Finalmente, la
 gestión de contexto es acumulativa: una conversación larga terminará excediendo
-la ventana del modelo, y un anfitrión de producción necesitaría resumir o recortar
-el historial.
+la ventana del modelo, y un anfitrión de producción necesitaría resumir o
+recortar el historial.
